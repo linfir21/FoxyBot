@@ -1,25 +1,44 @@
+# foxbot/foxbot.py
 import logging
 import os
 import requests
-import random
 
+from dotenv import load_dotenv
+from logging.handlers import RotatingFileHandler
 from telebot import TeleBot, types
 
 
-# Логирование только в stdout (для Render)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-)
-logger = logging.getLogger(__name__)
+load_dotenv()
 
 secret_token = os.getenv('TOKEN')
 if not secret_token:
-    raise ValueError('TOKEN не найден! Установите переменную окружения в Render')
+    raise ValueError(
+        'Не найден токен бота! Убедитесь, что в файле .env есть переменная TOKEN'
+    )
 
 bot = TeleBot(token=secret_token)
 
+# Настройка глобального логирования
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+)
+
+# Настройка логгера для текущего файла с ротацией
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+handler = RotatingFileHandler(
+    'foxbot.log', maxBytes=50000000, backupCount=5, encoding='utf-8'
+)
+formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
+# API для случайных фото лис
 URL = 'https://randomfox.ca/floof/'
+# Fallback API (коты)
 FALLBACK_URL = 'https://api.thecatapi.com/v1/images/search'
 
 
@@ -50,18 +69,23 @@ def get_new_image():
 
 @bot.message_handler(commands=['newfox'])
 def new_fox(message):
+    """Обработчик команды /newfox — отправляет фото лисы."""
     chat_id = message.chat.id
     image_url = get_new_image()
     if image_url:
         bot.send_photo(chat_id, image_url)
         logger.info(f'Отправлено фото в чат {chat_id}')
     else:
-        bot.send_message(chat_id, 'Не удалось получить фото. Попробуйте позже.')
+        bot.send_message(
+            chat_id,
+            'Не удалось получить фото. Попробуйте позже.',
+        )
         logger.warning(f'Не удалось отправить фото в чат {chat_id}')
 
 
 @bot.message_handler(commands=['start'])
 def wake_up(message):
+    """Обработчик команды /start — приветствие и первая лиса."""
     chat_id = message.chat.id
     name = message.from_user.first_name
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -85,9 +109,13 @@ def wake_up(message):
     if image_url:
         bot.send_photo(chat_id, image_url)
     else:
-        bot.send_message(chat_id, 'К сожалению, не удалось загрузить фото. Нажми /newfox ещё раз!')
+        bot.send_message(
+            chat_id,
+            'К сожалению, не удалось загрузить фото. Нажми /newfox ещё раз!',
+        )
 
 
+# Нежные фразы для кнопок
 TENDER_PHRASES = {
     'Ты моё солнышко ☀️': [
         'Ты моё солнышко, без тебя мой мир холодный и серый! ☀️',
@@ -155,11 +183,14 @@ TENDER_PHRASES = {
 
 @bot.message_handler(content_types=['text'])
 def say_hi(message):
-    chat_id = message.chat.id
+    """Обработчик текстовых сообщений."""
+    chat = message.chat
+    chat_id = chat.id
     text = message.text
     logger.info(f'Получено сообщение от {chat_id}: {text}')
 
     if text in TENDER_PHRASES:
+        import random
         phrase = random.choice(TENDER_PHRASES[text])
         bot.send_message(chat_id=chat_id, text=phrase)
         logger.info(f'Отправлена нежность в чат {chat_id}')
@@ -171,14 +202,16 @@ def say_hi(message):
 
     bot.send_message(
         chat_id=chat_id,
-        text='Привет, я FoxBot! Нажми Лисёночек:3, и я покажу тебе лису. '
-             'Или нажми на кнопочку, и я покажу тебе любовь:3'
+        text=(
+            'Привет, я FoxBot! Нажми Лисёночек:3, и я покажу тебе лису. '
+            'Или нажми на кнопочку, и я покажу тебе любовь:3'
+        ),
     )
 
 
 def main():
     logger.info('FoxBot запущен')
-    bot.infinity_polling(timeout=60, long_polling_timeout=5)
+    bot.polling(none_stop=True)
 
 
 if __name__ == '__main__':
