@@ -23,13 +23,8 @@ Telegram-бот, который отправляет случайные фото
    pip install -r requirements.txt
    ```
 
-2. Создайте файл `.env` на основе `.env.example` и добавьте токен вашего бота:
-   ```bash
-   cp .env.example .env
-   ```
-   Затем отредактируйте `.env`, подставив реальный токен от [@BotFather](https://t.me/BotFather).
 
-3. Запустите бота:
+2. Запустите бота:
    ```bash
    python foxbot.py
    ```
@@ -40,7 +35,6 @@ Telegram-бот, который отправляет случайные фото
 foxbot/
 ├── foxbot.py         # Основной файл бота
 ├── requirements.txt  # Зависимости проекта
-├── .env.example      # Шаблон переменных окружения
 └── README.md         # Описание проекта
 ```
 
