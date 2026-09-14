@@ -41,6 +41,42 @@ URL = 'https://randomfox.ca/floof/'
 # Fallback API (коты)
 FALLBACK_URL = 'https://api.thecatapi.com/v1/images/search'
 
+# --- AI-чат (Kimi / Moonshot) ---
+MOONSHOT_KEY = os.getenv('MOONSHOT_API_KEY')
+AI_URL = 'https://api.moonshot.ai/v1/chat/completions'
+AI_MODEL = 'kimi-k2.6'  # дешёвая модель для чата; полный список — в доках
+AI_HISTORY_LIMIT = 10   # сколько сообщений помнит (история = основные затраты)
+
+# история диалогов: chat_id -> список сообщений
+histories: dict[int, list] = {}
+
+
+def ask_ai(chat_id: int, text: str) -> str:
+    """Отправляет сообщение пользователя в Kimi API и возвращает ответ."""
+    history = histories.setdefault(chat_id, [
+        {'role': 'system', 'content':
+         'Ты — Лисёночек, милый лис-ассистент в Telegram. '
+         'Отвечай кратко, дружелюбно, по-русски, иногда фыркай,'
+         'а иногда говори комплименты, как лисенок, лисенку'}
+    ])
+    history.append({'role': 'user', 'content': text})
+    # режем историю: системный промпт + последние N сообщений
+    history[:] = history[:1] + history[-AI_HISTORY_LIMIT:]
+
+    response = requests.post(
+        AI_URL,
+        headers={'Authorization': f'Bearer {MOONSHOT_KEY}'},
+        json={
+            'model': AI_MODEL,
+            'messages': history,
+        },
+        timeout=60,
+    )
+    response.raise_for_status()
+    answer = response.json()['choices'][0]['message']['content']
+    history.append({'role': 'assistant', 'content': answer})
+    return answer
+
 
 def get_new_image():
     """Получает ссылку на случайное фото лисы."""
@@ -81,6 +117,14 @@ def new_fox(message):
             'Не удалось получить фото. Попробуйте позже.',
         )
         logger.warning(f'Не удалось отправить фото в чат {chat_id}')
+
+
+@bot.message_handler(commands=['forget'])
+def forget_history(message):
+    """Обработчик команды /forget — сбрасывает историю диалога с ИИ."""
+    histories.pop(message.chat.id, None)
+    bot.send_message(message.chat.id, 'Фыр! Я всё забыл. Начнём с чистого листа:3')
+    logger.info(f'История ИИ очищена для чата {message.chat.id}')
 
 
 @bot.message_handler(commands=['start'])
@@ -200,13 +244,24 @@ def say_hi(message):
         new_fox(message)
         return
 
-    bot.send_message(
-        chat_id=chat_id,
-        text=(
-            'Привет, я FoxBot! Нажми Лисёночек:3, и я покажу тебе лису. '
-            'Или нажми на кнопочку, и я покажу тебе любовь:3'
-        ),
-    )
+    # Всё остальное уходит в ИИ-чат
+    if not MOONSHOT_KEY:
+        bot.send_message(
+            chat_id=chat_id,
+            text=('Привет, я FoxBot! Нажми Лисёночек:3, и я покажу тебе лису. '
+                  'Или нажми на кнопочку, и я покажу тебе любовь:3'),
+        )
+        return
+
+    bot.send_chat_action(chat_id, 'typing')
+    try:
+        answer = ask_ai(chat_id, text)
+    except Exception as error:
+        logger.error(f'Ошибка AI-запроса: {error}')
+        answer = 'Фыр... я запутался в мыслях. Попробуй ещё раз:3'
+    # лимит Telegram — 4096 символов на сообщение
+    for i in range(0, len(answer), 4096):
+        bot.send_message(chat_id, answer[i:i + 4096])
 
 
 def main():
