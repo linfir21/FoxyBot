@@ -41,6 +41,12 @@ URL = 'https://randomfox.ca/floof/'
 # Fallback API (коты)
 FALLBACK_URL = 'https://api.thecatapi.com/v1/images/search'
 
+# ==== erazeChat 2048: раздача приложения и создание комнат ====
+# Путь к APK на сервере (обновление = просто заменить этот файл)
+APK_PATH = os.getenv('APK_PATH', 'erazechat_2048.apk')
+# Куда бот стучится за кодом комнаты (Django)
+DJANGO_API = os.getenv('DJANGO_API_URL', 'http://127.0.0.1:8000/api')
+
 # --- AI-чат (Kimi / Moonshot) ---
 MOONSHOT_KEY = os.getenv('MOONSHOT_API_KEY')
 AI_URL = 'https://api.moonshot.ai/v1/chat/completions'
@@ -76,6 +82,76 @@ def ask_ai(chat_id: int, text: str) -> str:
     answer = response.json()['choices'][0]['message']['content']
     history.append({'role': 'assistant', 'content': answer})
     return answer
+
+APK_CAPTION = (
+    'Игра 2048 со скрытым зашифрованным чатом (E2E).\n\n'
+    '1. Открой этот файл — Android попросит разрешить установку из Telegram (один раз)\n'
+    '2. Установи и открой игру\n'
+    '3. Нажми 5 раз на надпись «2048» — откроется скрытый чат\n'
+    '4. Введи имя и код комнаты (код создаёт кнопка ниже ⬇️)\n\n'
+    'Кто-то должен зайти в ту же комнату — только тогда чат заработает.'
+)
+
+
+def _rooms_keyboard() -> types.InlineKeyboardMarkup:
+    """Кнопка создания комнаты под сообщением с APK."""
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    keyboard.add(
+        types.InlineKeyboardButton(
+            'Создать комнату для чата 🗝️', callback_data='eraze_create_room'
+        )
+    )
+    return keyboard
+
+
+@bot.message_handler(commands=['app', 'game'])
+def send_app(message):
+    """Отправляет APK игры и кнопку создания комнаты."""
+    chat_id = message.chat.id
+    keyboard = _rooms_keyboard()
+    if not os.path.exists(APK_PATH):
+        bot.send_message(
+            chat_id,
+            'APK пока не загружен на сервер. Попробуй позже.',
+            reply_markup=keyboard,
+        )
+        logger.warning(f'APK не найден по пути {APK_PATH}')
+        return
+    # Читаем файл при каждом запросе: замена файла = обновление для всех
+    with open(APK_PATH, 'rb') as apk_file:
+        bot.send_document(
+            chat_id,
+            apk_file,
+            caption=APK_CAPTION,
+            reply_markup=keyboard,
+        )
+    logger.info(f'Отправлен APK в чат {chat_id}')
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'eraze_create_room')
+def create_chat_room(call):
+    """Создаёт комнату через Django API и присылает код."""
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    try:
+        response = requests.post(f'{DJANGO_API}/room/create/', timeout=10)
+        response.raise_for_status()
+        room_id = response.json().get('room_id')
+    except Exception as error:
+        logger.error(f'Не удалось создать комнату: {error}')
+        bot.send_message(chat_id, 'Не удалось создать комнату. Сервер спит, попробуй позже.')
+        return
+    if not room_id:
+        bot.send_message(chat_id, 'Сервер вернул пустой код комнаты.')
+        return
+    bot.send_message(
+        chat_id,
+        f'Код комнаты: <b>{room_id}</b>\n\n'
+        'Отправь его тому, с кем хочешь чатиться, '
+        'и оба введите этот код в игре (5 тапов по «2048»).',
+        parse_mode='HTML',
+    )
+    logger.info(f'Создана комната {room_id} для чата {chat_id}')
 
 
 def get_new_image():
@@ -138,7 +214,8 @@ def wake_up(message):
     button_hug = types.KeyboardButton('Обнимашки 🤗')
     button_mur = types.KeyboardButton('Фыр ❤️')
     button_spicy = types.KeyboardButton('Горяченькое 🔥')
-    keyboard.add(button_fox, button_sun, button_hug, button_mur, button_spicy)
+    button_game = types.KeyboardButton('🎮 Игра 2048 + чат')
+    keyboard.add(button_fox, button_sun, button_hug, button_mur, button_spicy, button_game)
 
     bot.send_message(
         chat_id=chat_id,
@@ -232,6 +309,10 @@ def say_hi(message):
 
     if text == 'Лисёночек:3':
         new_fox(message)
+        return
+
+    if text in ('🎮 Игра 2048 + чат', '/app', '/game'):
+        send_app(message)
         return
 
     # Всё остальное уходит в ИИ-чат
