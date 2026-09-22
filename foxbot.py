@@ -46,6 +46,8 @@ FALLBACK_URL = 'https://api.thecatapi.com/v1/images/search'
 APK_PATH = os.getenv('APK_PATH', 'erazechat_2048.apk')
 # Куда бот стучится за кодом комнаты (Django)
 DJANGO_API = os.getenv('DJANGO_API_URL', 'http://127.0.0.1:8000/api')
+# Токен бэкенда (заголовок X-Bot-Token) — должен совпадать с ERAZE_BOT_TOKEN на сервере
+BOT_API_TOKEN = os.getenv('BOT_API_TOKEN')
 
 # --- AI-чат (Kimi / Moonshot) ---
 MOONSHOT_KEY = os.getenv('MOONSHOT_API_KEY')
@@ -133,8 +135,20 @@ def create_chat_room(call):
     """Создаёт комнату через Django API и присылает код."""
     chat_id = call.message.chat.id
     bot.answer_callback_query(call.id)
+    if not BOT_API_TOKEN:
+        logger.error('BOT_API_TOKEN не задан в .env')
+        bot.send_message(chat_id, 'Бот не настроен (нет токена API). Сообщи админу.')
+        return
     try:
-        response = requests.post(f'{DJANGO_API}/room/create/', timeout=10)
+        response = requests.post(
+            f'{DJANGO_API}/room/create/',
+            headers={'X-Bot-Token': BOT_API_TOKEN},
+            timeout=10,
+        )
+        if response.status_code == 403:
+            logger.error('Бэкенд отклонил токен (403)')
+            bot.send_message(chat_id, 'Ошибка авторизации на сервере. Сообщи админу.')
+            return
         response.raise_for_status()
         room_id = response.json().get('room_id')
     except Exception as error:
