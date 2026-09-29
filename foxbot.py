@@ -45,7 +45,7 @@ FALLBACK_URL = 'https://api.thecatapi.com/v1/images/search'
 
 # ==== erazeChat 2048: раздача приложения и создание комнат ====
 # Путь к APK на сервере (обновление = просто заменить этот файл)
-APK_PATH = os.getenv('APK_PATH', 'erazechat_2048.apk')
+APK_PATH = os.getenv('APK_PATH', '2048.apk')
 # Куда бот стучится за кодом комнаты (Django)
 DJANGO_API = os.getenv('DJANGO_API_URL', 'http://127.0.0.1:8000/api')
 # Токен бэкенда (заголовок X-Bot-Token) — должен совпадать с ERAZE_BOT_TOKEN на сервере
