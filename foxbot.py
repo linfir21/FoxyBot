@@ -1,6 +1,8 @@
 # foxbot/foxbot.py
+import json
 import logging
 import os
+import time
 import requests
 
 from dotenv import load_dotenv
@@ -57,6 +59,31 @@ AI_HISTORY_LIMIT = 10   # сколько сообщений помнит (ист
 
 # история диалогов: chat_id -> список сообщений
 histories: dict[int, list] = {}
+
+# --- Рассылка: все, кто общался с ботом ---
+USERS_FILE = 'users.json'
+ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))  # твой Telegram ID (узнать: @userinfobot)
+
+
+def load_users() -> set:
+    "Читает сохранённые chat_id из файла."
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, encoding='utf-8') as f:
+                return set(json.load(f))
+        except (json.JSONDecodeError, OSError):
+            return set()
+    return set()
+
+
+def save_user(chat_id: int):
+    "Добавляет chat_id в список для рассылки."
+    users = load_users()
+    if chat_id not in users:
+        users.add(chat_id)
+        with open(USERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(list(users), f)
+        logger.info(f'Новый пользователь для рассылки: {chat_id}')
 
 
 def ask_ai(chat_id: int, text: str) -> str:
@@ -217,10 +244,38 @@ def forget_history(message):
     logger.info(f'История ИИ очищена для чата {message.chat.id}')
 
 
+@bot.message_handler(commands=['broadcast'])
+def broadcast(message):
+    "Рассылка сообщения всем пользователям. Формат: /broadcast текст"
+    if message.from_user.id != ADMIN_ID:
+        return
+    text = message.text[len('/broadcast'):].strip()
+    if not text:
+        bot.send_message(message.chat.id, 'Формат: /broadcast текст сообщения')
+        return
+
+    users = load_users()
+    sent, failed = 0, 0
+    for user_id in users:
+        try:
+            bot.send_message(user_id, text)
+            sent += 1
+        except Exception as error:
+            failed += 1
+            logger.warning(f'Рассылка: не доставлено {user_id}: {error}')
+        time.sleep(0.05)  # ~20 сообщений/сек, лимит Telegram ~30/сек
+    bot.send_message(
+        message.chat.id,
+        f'Рассылка завершена: отправлено {sent}, ошибок {failed}. Всего в базе: {len(users)}',
+    )
+    logger.info(f'Рассылка: отправлено {sent}, ошибок {failed}')
+
+
 @bot.message_handler(commands=['start'])
 def wake_up(message):
     """Обработчик команды /start — приветствие и первая лиса."""
     chat_id = message.chat.id
+    save_user(chat_id)
     name = message.from_user.first_name
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     button_fox = types.KeyboardButton('Лисёночек:3')
@@ -312,6 +367,7 @@ def say_hi(message):
     chat = message.chat
     chat_id = chat.id
     text = message.text
+    save_user(chat_id)
     logger.info(f'Получено сообщение от {chat_id}: {text}')
 
     if text in TENDER_PHRASES:
