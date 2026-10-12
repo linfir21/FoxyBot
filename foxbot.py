@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import random
 import sqlite3
 import time
 import requests
@@ -341,9 +342,18 @@ def fox_fact(message):
         return
     bot.send_chat_action(chat_id, 'typing')
     try:
+        # Тема + случайное число в промпте: модель детерминирована и без
+        # этого выдаёт один и тот же факт про магнитное поле Земли
+        topic = random.choice([
+            'строение тела и хвост', 'лисята и семья', 'звуки и общение',
+            'питание', 'зимняя жизнь', 'разные виды лис', 'скорость и охота',
+            'отношения с людьми', 'способности чувств', 'самые необычные виды',
+        ])
         fact = ask_ai_once(
-            'Расскажи один короткий интересный факт о лисах. '
-            'Только сам факт, без вступлений, до 300 символов.'
+            f'Расскажи один короткий интересный факт о лисах, '
+            f'тема: {topic}. '
+            f'Только сам факт, без вступлений, до 300 символов. '
+            f'Случайное число для разнообразия: {random.randint(1, 10**9)}.'
         )
     except Exception as error:
         logger.error(f'Ошибка запроса факта: {error}')
@@ -574,7 +584,6 @@ def say_hi(message):
     logger.info(f'Получено сообщение от {chat_id}: {text}')
 
     if text in TENDER_PHRASES:
-        import random
         phrase = random.choice(TENDER_PHRASES[text])
         bot.send_message(chat_id=chat_id, text=phrase)
         logger.info(f'Отправлена нежность в чат {chat_id}')
