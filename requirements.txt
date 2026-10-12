@@ -5,3 +5,6 @@ pyTelegramBotAPI==4.22.1
 python-dotenv==1.0.1
 requests==2.33.1
 urllib3==2.6.3
+
+# Для тестов (venv/Scripts/python.exe -m pytest tests/ -v)
+pytest==9.1.1
