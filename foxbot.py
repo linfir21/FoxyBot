@@ -183,7 +183,7 @@ def ask_ai(chat_id: int, text: str) -> str:
     return answer
 
 
-def ask_ai_once(prompt: str, max_tokens: int = 200) -> str:
+def ask_ai_once(prompt: str, max_tokens: int = 2048) -> str:
     """Одноразовый запрос к ИИ без истории и системного промпта."""
     response = requests.post(
         AI_URL,
@@ -192,7 +192,7 @@ def ask_ai_once(prompt: str, max_tokens: int = 200) -> str:
             'model': AI_MODEL,
             'messages': [{'role': 'user', 'content': prompt}],
             'max_tokens': max_tokens,
-            'temperature': 0.9,
+            # temperature не трогаем: kimi-k2.6 принимает только значение 1
         },
         timeout=60,
     )
@@ -369,6 +369,37 @@ def stats(message):
     logger.info(f'/stats: {total_users} пользователей, {today_messages} сообщений сегодня')
 
 
+@bot.message_handler(commands=['updatekb'])
+def update_keyboards(message):
+    """Обновляет reply-клавиатуру у всех пользователей (только админ).
+
+    Reply-клавиатуру нельзя отредактировать, но сообщение с новой разметкой
+    заменяет старую клавиатуру у получателя автоматически.
+    """
+    if message.from_user.id != ADMIN_ID:
+        return
+    users = load_users()
+    keyboard = build_main_keyboard()
+    sent, failed = 0, 0
+    for user_id in users:
+        try:
+            bot.send_message(
+                user_id,
+                'Фыр! У меня новые кнопочки 🦊✨',
+                reply_markup=keyboard,
+            )
+            sent += 1
+        except Exception as error:
+            failed += 1
+            logger.warning(f'/updatekb: не доставлено {user_id}: {error}')
+        time.sleep(0.05)  # ~20 сообщений/сек, лимит Telegram ~30/сек
+    bot.send_message(
+        message.chat.id,
+        f'Клавиатуры обновлены: отправлено {sent}, ошибок {failed}.',
+    )
+    logger.info(f'/updatekb: отправлено {sent}, ошибок {failed}')
+
+
 # Текст ожидающей подтверждения рассылки: admin_id -> текст
 pending_broadcasts: dict[int, str] = {}
 
@@ -433,20 +464,29 @@ def broadcast_confirm(call):
     logger.info(f'Рассылка: отправлено {sent}, ошибок {failed}')
 
 
+def build_main_keyboard() -> types.ReplyKeyboardMarkup:
+    """Главная reply-клавиатура. Отправка любого сообщения с этой разметкой
+    обновляет кнопки у пользователя — старая клавиатура заменяется автоматически."""
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    keyboard.add(
+        types.KeyboardButton('Лисёночек:3'),
+        types.KeyboardButton('Ты моё солнышко ☀️'),
+        types.KeyboardButton('Обнимашки 🤗'),
+        types.KeyboardButton('Фыр ❤️'),
+        types.KeyboardButton('Горяченькое 🔥'),
+        types.KeyboardButton('🎮 Игра 2048 + чат'),
+        types.KeyboardButton('Лисий факт 🦊📚'),
+    )
+    return keyboard
+
+
 @bot.message_handler(commands=['start'])
 def wake_up(message):
     """Обработчик команды /start — приветствие и первая лиса."""
     chat_id = message.chat.id
     save_user(chat_id)
     name = message.from_user.first_name
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    button_fox = types.KeyboardButton('Лисёночек:3')
-    button_sun = types.KeyboardButton('Ты моё солнышко ☀️')
-    button_hug = types.KeyboardButton('Обнимашки 🤗')
-    button_mur = types.KeyboardButton('Фыр ❤️')
-    button_spicy = types.KeyboardButton('Горяченькое 🔥')
-    button_game = types.KeyboardButton('🎮 Игра 2048 + чат')
-    keyboard.add(button_fox, button_sun, button_hug, button_mur, button_spicy, button_game)
+    keyboard = build_main_keyboard()
 
     bot.send_message(
         chat_id=chat_id,
@@ -546,6 +586,10 @@ def say_hi(message):
 
     if text in ('🎮 Игра 2048 + чат', '/app', '/game'):
         send_app(message)
+        return
+
+    if text == 'Лисий факт 🦊📚':
+        fox_fact(message)
         return
 
     # Всё остальное уходит в ИИ-чат
