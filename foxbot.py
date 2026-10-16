@@ -48,6 +48,8 @@ FALLBACK_URL = 'https://api.thecatapi.com/v1/images/search'
 # ==== erazeChat 2048: раздача приложения и создание комнат ====
 # Путь к APK на сервере (обновление = просто заменить этот файл)
 APK_PATH = os.getenv('APK_PATH', '2048.apk')
+# ==== Азбука для малышей: обучающая игра (прототип) ====
+ABC_APK_PATH = os.getenv('ABC_APK_PATH', 'app-release.apk')
 # Куда бот стучится за кодом комнаты (Django)
 DJANGO_API = os.getenv('DJANGO_API_URL', 'http://127.0.0.1:8000/api')
 # Токен бэкенда (заголовок X-Bot-Token) — должен совпадать с ERAZE_BOT_TOKEN на сервере
@@ -209,6 +211,16 @@ APK_CAPTION = (
     'Кто-то должен зайти в ту же комнату — только тогда чат заработает.'
 )
 
+ABC_CAPTION = (
+    'Обучающая игра «Азбука» для детей (прототип).\n\n'
+    'Ребёнок учит буквы алфавита в игровой форме: знакомится с каждой буквой, '
+    'повторяет её звук и подбирает слова на эту букву.\n\n'
+    '1. Открой этот файл — Android попросит разрешить установку из Telegram (один раз)\n'
+    '2. Установи и открой игру\n'
+    '3. Выбери букву и проходи занятие вместе с малышом\n\n'
+    'Прототип: часть букв может отсутствовать, а интерфейс меняться.'
+)
+
 
 def _rooms_keyboard() -> types.InlineKeyboardMarkup:
     """Кнопка создания комнаты под сообщением с APK."""
@@ -221,28 +233,38 @@ def _rooms_keyboard() -> types.InlineKeyboardMarkup:
     return keyboard
 
 
-@bot.message_handler(commands=['app', 'game'])
-def send_app(message):
-    """Отправляет APK игры и кнопку создания комнаты."""
+def _send_apk(message, apk_path: str, caption: str, keyboard=None):
+    """Отправляет APK-файл с описанием; при отсутствии файла — сообщение об этом."""
     chat_id = message.chat.id
-    keyboard = _rooms_keyboard()
-    if not os.path.exists(APK_PATH):
+    if not os.path.exists(apk_path):
         bot.send_message(
             chat_id,
             'APK пока не загружен на сервер. Попробуй позже.',
             reply_markup=keyboard,
         )
-        logger.warning(f'APK не найден по пути {APK_PATH}')
+        logger.warning(f'APK не найден по пути {apk_path}')
         return
     # Читаем файл при каждом запросе: замена файла = обновление для всех
-    with open(APK_PATH, 'rb') as apk_file:
+    with open(apk_path, 'rb') as apk_file:
         bot.send_document(
             chat_id,
             apk_file,
-            caption=APK_CAPTION,
+            caption=caption,
             reply_markup=keyboard,
         )
-    logger.info(f'Отправлен APK в чат {chat_id}')
+    logger.info(f'Отправлен {apk_path} в чат {chat_id}')
+
+
+@bot.message_handler(commands=['app', 'game'])
+def send_app(message):
+    """Отправляет APK игры и кнопку создания комнаты."""
+    _send_apk(message, APK_PATH, APK_CAPTION, keyboard=_rooms_keyboard())
+
+
+@bot.message_handler(commands=['abc', 'alphabet'])
+def send_alphabet_app(message):
+    """Отправляет APK обучающей игры «Азбука» для детей."""
+    _send_apk(message, ABC_APK_PATH, ABC_CAPTION)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'eraze_create_room')
@@ -481,10 +503,10 @@ def build_main_keyboard() -> types.ReplyKeyboardMarkup:
     keyboard.add(
         types.KeyboardButton('Лисёночек:3'),
         types.KeyboardButton('Ты моё солнышко ☀️'),
-        types.KeyboardButton('Обнимашки 🤗'),
         types.KeyboardButton('Фыр ❤️'),
         types.KeyboardButton('Горяченькое 🔥'),
         types.KeyboardButton('🎮 Игра 2048 + чат'),
+        types.KeyboardButton('🔤 Азбука для малышей'),
         types.KeyboardButton('Лисий факт 🦊📚'),
     )
     return keyboard
@@ -529,21 +551,15 @@ TENDER_PHRASES = {
         'Ты как лучший закат — красивый, тёплый, незабываемый! 🌇✨',
         'Твой свет освещает даже самые тёмные уголки моего мира! ✨☀️',
         'Я бы смотрел на тебя, как на рассвет, вечно! 🌅',
-        'Ты такой яркий, что мне нужны очки от любви! 😎❤️',
-        'Моё солнышко, ты заставляешь моё сердце петь! ☀️🎶',
-    ],
-    'Обнимашки 🤗': [
         'Крепко-крепко обнимаю тебя! 🤗🤗🤗',
-        'Обнимаю так, что никакие проблемы не пролезут между нами!',
-        'Посылаю тебе воздушный обнимашку! Лови! 🤗💕',
         'Заворачиваю тебя в пледик и обнимаю до упаду! 🛋️🤗',
-        'Мои руки скучают по тебе, приходи на обнимашки! 🤗',
         'Обнимаю тебя так крепко, что слышу твоё сердцебиение! 💓',
         'Шлю тебе сквозь-вселенский обнимашку! Лови! 🌌🤗',
         'В мире миллионы людей, но только ты — мой самый особенный! ✨',
-        'Обнимаю тебя с ног до головы, ты мой сладкий! 🤗❤️',
         'Ты заслуживаешь тысячу обнимашек в день! Вот первая! 🤗',
         'Представь, что я рядом и крепко обнимаю! Не отпускаю! 🤗',
+        'Ты такой яркий, что мне нужны очки от любви! 😎❤️',
+        'Моё солнышко, ты заставляешь моё сердце петь! ☀️🎶',
     ],
     'Фыр ❤️': [
         'Фыр-фыр, ты мой сладенький лисёнок! ❤️🦊',
@@ -595,6 +611,10 @@ def say_hi(message):
 
     if text in ('🎮 Игра 2048 + чат', '/app', '/game'):
         send_app(message)
+        return
+
+    if text in ('🔤 Азбука для малышей', '/abc', '/alphabet'):
+        send_alphabet_app(message)
         return
 
     if text == 'Лисий факт 🦊📚':
