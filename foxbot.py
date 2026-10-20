@@ -234,7 +234,8 @@ def _rooms_keyboard() -> types.InlineKeyboardMarkup:
 
 
 def _send_apk(message, apk_path: str, caption: str, keyboard=None):
-    """Отправляет APK-файл с описанием; при отсутствии файла — сообщение об этом."""
+    """Отправляет APK файлом, если он < 50MB (лимит Telegram API),
+    иначе — ссылкой на скачивание. При отсутствии файла — сообщение об этом."""
     chat_id = message.chat.id
     if not os.path.exists(apk_path):
         bot.send_message(
@@ -244,6 +245,20 @@ def _send_apk(message, apk_path: str, caption: str, keyboard=None):
         )
         logger.warning(f'APK не найден по пути {apk_path}')
         return
+    file_size = os.path.getsize(apk_path)
+    size_mb = file_size / (1024 * 1024)
+    if file_size > 50 * 1024 * 1024:
+        # Больше лимита Telegram — отправляем ссылку
+        download_url = 'https://disk.yandex.by/d/WMawwsjuk-nt8A'
+        text = f'{caption}\n\n[📥 Скачать приложение]({download_url})'
+        bot.send_message(
+            chat_id,
+            text,
+            parse_mode='Markdown',
+            reply_markup=keyboard,
+        )
+        logger.info(f'Отправлена ссылка на {apk_path} ({size_mb:.1f}MB) в чат {chat_id}')
+        return
     # Читаем файл при каждом запросе: замена файла = обновление для всех
     with open(apk_path, 'rb') as apk_file:
         bot.send_document(
@@ -252,7 +267,7 @@ def _send_apk(message, apk_path: str, caption: str, keyboard=None):
             caption=caption,
             reply_markup=keyboard,
         )
-    logger.info(f'Отправлен {apk_path} в чат {chat_id}')
+    logger.info(f'Отправлен {apk_path} ({size_mb:.1f}MB) в чат {chat_id}')
 
 
 @bot.message_handler(commands=['app', 'game'])
