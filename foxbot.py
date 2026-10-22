@@ -249,7 +249,7 @@ def _send_apk(message, apk_path: str, caption: str, keyboard=None):
     size_mb = file_size / (1024 * 1024)
     if file_size > 50 * 1024 * 1024:
         # Больше лимита Telegram — отправляем ссылку
-        download_url = 'https://disk.yandex.by/d/WMawwsjuk-nt8A'
+        download_url = 'https://disk.yandex.by/d/mVxWdL3X4tgvbQ'
         text = f'{caption}\n\n[📥 Скачать приложение]({download_url})'
         bot.send_message(
             chat_id,
