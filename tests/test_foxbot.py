@@ -102,7 +102,7 @@ def test_get_new_image_total_failure(monkeypatch):
 
 # ==== ИИ-история ====
 
-def test_ask_ai_keeps_system_prompt_and_limit(monkeypatch):
+def test_ask_ai_keeps_system_prompt_and_limit(tmp_users_db, monkeypatch):
     monkeypatch.setattr(foxbot, 'AI_HISTORY_LIMIT', 4)
     sent_payloads = []
 
@@ -130,14 +130,68 @@ def test_ask_ai_keeps_system_prompt_and_limit(monkeypatch):
 # ==== Статистика ====
 
 def test_track_message_and_get_stats(tmp_users_db):
-    total, today = foxbot.get_stats()
-    assert (total, today) == (0, 0)
+    data = foxbot.get_stats()
+    assert data['total_users'] == 0
+    assert data['today_messages'] == 0
+    assert data['today_active'] == 0
     for _ in range(3):
-        foxbot.track_message()
+        foxbot.track_message(111)
+    foxbot.track_message(222)  # второй активный пользователь
     foxbot.save_user(111)
-    total, today = foxbot.get_stats()
-    assert total == 1
-    assert today == 3
+    data = foxbot.get_stats()
+    assert data['total_users'] == 1
+    assert data['today_messages'] == 4
+    assert data['week_messages'] == 4
+    assert data['today_active'] == 2
+    assert data['top_hours']  # хотя бы один час записан
+
+
+def test_remove_user(tmp_users_db):
+    foxbot.save_user(111)
+    foxbot.save_user(222)
+    foxbot.remove_user(111)
+    assert foxbot.load_users() == {222}
+    foxbot.remove_user(111)  # повторное удаление — no-op
+    assert foxbot.load_users() == {222}
+
+
+# ==== Служебные ключи (meta) ====
+
+def test_meta_roundtrip(tmp_users_db):
+    assert foxbot._meta_get('last_daily_fox') is None
+    foxbot._meta_set('last_daily_fox', '2026-11-13')
+    assert foxbot._meta_get('last_daily_fox') == '2026-11-13'
+    foxbot._meta_set('last_daily_fox', '2026-11-14')  # перезапись
+    assert foxbot._meta_get('last_daily_fox') == '2026-11-14'
+
+
+# ==== Персистентность ИИ-истории ====
+
+def test_history_survives_memory_loss(tmp_users_db, monkeypatch):
+    monkeypatch.setattr(foxbot.requests, 'post', _fake_post_factory([]))
+    foxbot.histories.clear()
+    foxbot.last_ai_activity.clear()
+    foxbot.ask_ai(1, 'запомни это')
+    saved = list(foxbot.histories[1])
+
+    # имитируем рестарт: память пуста, история должна подняться из SQLite
+    foxbot.histories.clear()
+    foxbot.last_ai_activity.clear()
+    foxbot._load_history(1)
+    assert foxbot.histories[1] == saved
+
+
+def test_forget_removes_history_from_db(tmp_users_db, monkeypatch):
+    monkeypatch.setattr(foxbot.requests, 'post', _fake_post_factory([]))
+    monkeypatch.setattr(foxbot.bot, 'send_message', lambda *a, **kw: None)
+    foxbot.histories.clear()
+    foxbot.last_ai_activity.clear()
+    foxbot.ask_ai(1, 'привет')
+
+    foxbot.forget_history(_msg('/forget', chat_id=1))
+    assert 1 not in foxbot.histories
+    foxbot._load_history(1)  # в БД тоже пусто
+    assert 1 not in foxbot.histories
 
 
 # ==== TTL истории ====
@@ -149,7 +203,7 @@ def _fake_post_factory(sent, answer='Фыр!'):
     return fake_post
 
 
-def test_ask_ai_ttl_expires_old_history(monkeypatch):
+def test_ask_ai_ttl_expires_old_history(tmp_users_db, monkeypatch):
     monkeypatch.setattr(foxbot.requests, 'post', _fake_post_factory([]))
     foxbot.histories.clear()
     foxbot.last_ai_activity.clear()
@@ -181,11 +235,12 @@ def test_ask_ai_once_isolated_from_history(monkeypatch):
 
 # ==== Рассылка с подтверждением ====
 
-def _msg(text, user_id=42, chat_id=42):
+def _msg(text, user_id=42, chat_id=42, reply_to_message=None):
     return SimpleNamespace(
         text=text,
         from_user=SimpleNamespace(id=user_id),
         chat=SimpleNamespace(id=chat_id),
+        reply_to_message=reply_to_message,
     )
 
 
@@ -245,3 +300,137 @@ def test_broadcast_stranger_cannot_confirm(admin_env):
     foxbot.broadcast(_msg('/broadcast Секрет'))
     foxbot.broadcast_confirm(_call('bc_send', user_id=99))  # не админ
     assert 42 in foxbot.pending_broadcasts  # рассылка не подтверждена
+
+
+# ==== Рассылка реплаем (любой контент) ====
+
+def test_broadcast_reply_copy_mode(admin_env, monkeypatch):
+    copied = []
+    monkeypatch.setattr(
+        foxbot.bot, 'copy_message',
+        lambda chat_id, from_chat_id, message_id: copied.append(
+            (chat_id, from_chat_id, message_id)
+        ),
+    )
+    foxbot.save_user(7)
+    photo = SimpleNamespace(
+        chat=SimpleNamespace(id=42), message_id=555,
+        text=None, caption='смотри какое фото', content_type='photo',
+    )
+    foxbot.broadcast(_msg('/broadcast', reply_to_message=photo))
+    assert foxbot.pending_broadcasts[42] == ('copy', 42, 555)
+
+    foxbot.broadcast_confirm(_call('bc_send'))
+    assert copied == [(7, 42, 555)]  # копия ушла пользователю
+    assert 42 not in foxbot.pending_broadcasts
+
+
+# ==== Мини-игра «Угадай число» ====
+
+@pytest.fixture()
+def game_env(tmp_users_db, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        foxbot.bot, 'send_message',
+        lambda chat_id, text, **kw: sent.append((chat_id, text)),
+    )
+    monkeypatch.setattr(foxbot.random, 'randint', lambda a, b: 42)
+    foxbot.games.clear()
+    return sent
+
+
+def test_number_game_win(game_env):
+    foxbot._start_number_game(1)
+    assert foxbot.games[1] == {'number': 42, 'tries': 0}
+
+    foxbot.say_hi(_msg('50', chat_id=1))
+    assert 'Меньше' in game_env[-1][1]
+    foxbot.say_hi(_msg('42', chat_id=1))
+    assert 'Угадал за 2' in game_env[-1][1]
+    assert 1 not in foxbot.games  # игра закончилась
+
+
+def test_number_game_not_a_digit(game_env):
+    foxbot._start_number_game(1)
+    foxbot.say_hi(_msg('привет', chat_id=1))
+    assert 'число от 1 до 100' in game_env[-1][1]
+    assert foxbot.games[1]['tries'] == 0  # не засчитано как попытка
+
+
+def test_stopgame(game_env):
+    foxbot._start_number_game(1)
+    foxbot.stop_game(_msg('/stopgame', chat_id=1))
+    assert 1 not in foxbot.games
+    assert 'Сдаёшься' in game_env[-1][1]
+
+
+# ==== Настроение лисёнка (/mood) ====
+
+def test_mood_set_get_and_prompt(tmp_users_db):
+    assert foxbot._get_mood(1) is None
+    assert foxbot._system_prompt(1) == foxbot.FOX_SYSTEM_PROMPT
+    foxbot._set_mood(1, 'romantic')
+    assert foxbot._get_mood(1) == 'romantic'
+    assert foxbot.MOODS['romantic'] in foxbot._system_prompt(1)
+    foxbot._set_mood(1, 'grumpy')
+    assert foxbot._get_mood(1) == 'grumpy'
+    assert foxbot.MOODS['grumpy'] in foxbot._system_prompt(1)
+
+
+def test_mood_updates_running_dialog(tmp_users_db, monkeypatch):
+    sent_payloads = []
+    monkeypatch.setattr(foxbot.requests, 'post', _fake_post_factory(sent_payloads))
+    monkeypatch.setattr(foxbot.bot, 'send_message', lambda *a, **kw: None)
+    foxbot.histories.clear()
+    foxbot.last_ai_activity.clear()
+    foxbot.ask_ai(1, 'привет')
+    assert sent_payloads[-1][0]['content'] == foxbot.FOX_SYSTEM_PROMPT
+
+    foxbot.mood_cmd(_msg('/mood calm', chat_id=1))
+    assert foxbot._get_mood(1) == 'calm'
+    # промпт в живой истории обновлён на лету, диалог не потерян
+    assert foxbot.MOODS['calm'] in foxbot.histories[1][0]['content']
+    foxbot.ask_ai(1, 'как дела')
+    assert foxbot.MOODS['calm'] in sent_payloads[-1][0]['content']
+
+
+def test_mood_unknown_arg_shows_help(tmp_users_db, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        foxbot.bot, 'send_message',
+        lambda chat_id, text, **kw: sent.append(text),
+    )
+    foxbot.mood_cmd(_msg('/mood angry', chat_id=1))
+    assert '/mood playful' in sent[-1]
+    assert foxbot._get_mood(1) is None  # невалидное настроение не сохранено
+
+
+# ==== Rate limiting на ИИ ====
+
+def test_rate_limit_blocks_after_limit(monkeypatch):
+    monkeypatch.setattr(foxbot, 'AI_RATE_LIMIT', 3)
+    monkeypatch.setattr(foxbot, 'ADMIN_ID', 0)
+    foxbot.ai_requests.clear()
+    assert foxbot._ai_rate_ok(1) is True
+    assert foxbot._ai_rate_ok(1) is True
+    assert foxbot._ai_rate_ok(1) is True
+    assert foxbot._ai_rate_ok(1) is False  # лимит исчерпан
+    assert foxbot._ai_rate_ok(2) is True   # другой чат не затронут
+
+
+def test_rate_limit_window_expires(monkeypatch):
+    monkeypatch.setattr(foxbot, 'AI_RATE_LIMIT', 1)
+    monkeypatch.setattr(foxbot, 'ADMIN_ID', 0)
+    foxbot.ai_requests.clear()
+    assert foxbot._ai_rate_ok(1) is True
+    # старая метка протухла — окно снова свободно
+    foxbot.ai_requests[1] = [foxbot.time.time() - foxbot.AI_RATE_WINDOW - 1]
+    assert foxbot._ai_rate_ok(1) is True
+
+
+def test_rate_limit_admin_exempt(monkeypatch):
+    monkeypatch.setattr(foxbot, 'AI_RATE_LIMIT', 1)
+    monkeypatch.setattr(foxbot, 'ADMIN_ID', 42)
+    foxbot.ai_requests.clear()
+    foxbot._ai_rate_ok(42)
+    assert foxbot._ai_rate_ok(42) is True  # админ без лимита
