@@ -394,15 +394,19 @@ def test_mood_updates_running_dialog(tmp_users_db, monkeypatch):
     assert foxbot.MOODS['calm'] in sent_payloads[-1][0]['content']
 
 
-def test_mood_unknown_arg_shows_help(tmp_users_db, monkeypatch):
+def test_mood_unknown_arg_shows_menu(tmp_users_db, monkeypatch):
     sent = []
     monkeypatch.setattr(
         foxbot.bot, 'send_message',
-        lambda chat_id, text, **kw: sent.append(text),
+        lambda chat_id, text, **kw: sent.append((text, kw.get('reply_markup'))),
     )
     foxbot.mood_cmd(_msg('/mood angry', chat_id=1))
-    assert '/mood playful' in sent[-1]
-    assert foxbot._get_mood(1) is None  # невалидное настроение не сохранено
+    # невалидное настроение не сохранено, показано меню с кнопками
+    assert foxbot._get_mood(1) is None
+    text, keyboard = sent[-1]
+    assert 'Выбери, каким мне быть' in text
+    assert keyboard is not None
+    assert any(b.callback_data == 'mood:playful' for row in keyboard.keyboard for b in row)
 
 
 # ==== Rate limiting на ИИ ====

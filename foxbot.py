@@ -419,6 +419,9 @@ def ask_ai_image(prompt: str, image_b64: str, mime: str = 'image/jpeg') -> str:
 
     Намеренно вне истории диалога: base64 картинок раздул бы её до неприличия.
     Каждая картинка тарифицируется фиксировано (~1024 токена).
+    max_tokens большой не из жадности: kimi-k2.6 — reasoning-модель и «думает»
+    за тот же бюджет; с 1024 reasoning часто съедает всё и content выходит
+    пустым или обрезанным посреди слова (проверено на живом API).
     """
     response = requests.post(
         AI_URL,
@@ -434,7 +437,7 @@ def ask_ai_image(prompt: str, image_b64: str, mime: str = 'image/jpeg') -> str:
                     {'type': 'text', 'text': prompt},
                 ]},
             ],
-            'max_tokens': 1024,
+            'max_tokens': 8192,
         },
         timeout=90,
     )
@@ -609,33 +612,95 @@ def forget_history(message):
     logger.info(f'История ИИ очищена для чата {message.chat.id}')
 
 
+# Подписи и склонения для меню настроения
+MOOD_LABELS = {
+    'playful': '😜 Игривый',
+    'romantic': '💕 Романтичный',
+    'calm': '😌 Спокойный',
+    'grumpy': '🧓 Ворчливый',
+}
+MOOD_NAMES = {
+    'playful': 'игривое', 'romantic': 'романтичное',
+    'calm': 'спокойное', 'grumpy': 'ворчливое',
+}
+
+
+def _mood_keyboard(current: str | None) -> types.InlineKeyboardMarkup:
+    """Inline-меню выбора настроения; текущее отмечено галочкой."""
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    buttons = [
+        types.InlineKeyboardButton(
+            f'{"✅ " if mood == current else ""}{label}',
+            callback_data=f'mood:{mood}',
+        )
+        for mood, label in MOOD_LABELS.items()
+    ]
+    buttons.append(types.InlineKeyboardButton(
+        f'{"✅ " if current is None else ""}🦊 Обычное', callback_data='mood:none'
+    ))
+    keyboard.add(*buttons)
+    return keyboard
+
+
+def _apply_mood(chat_id: int, mood: str | None) -> str:
+    """Ставит или сбрасывает настроение. Системный промпт обновляется на лету,
+    контекст диалога не теряется. Возвращает название настроения для показа."""
+    with _users_db() as conn:
+        if mood is None:
+            conn.execute('DELETE FROM moods WHERE chat_id = ?', (chat_id,))
+        else:
+            conn.execute(
+                'INSERT INTO moods (chat_id, mood) VALUES (?, ?) '
+                'ON CONFLICT(chat_id) DO UPDATE SET mood = excluded.mood',
+                (chat_id, mood),
+            )
+    if chat_id in histories and histories[chat_id]:
+        histories[chat_id][0] = {'role': 'system', 'content': _system_prompt(chat_id)}
+        _save_history(chat_id)
+    return MOOD_NAMES.get(mood, 'обычное')
+
+
 @bot.message_handler(commands=['mood'])
 def mood_cmd(message):
-    """Настроение лисёнка: /mood playful|romantic|calm.
+    """Настроение лисёнка: меню с кнопками или /mood playful|romantic|calm.
 
     Сохраняет выбор в SQLite и подмешивает суффикс к системному промпту.
     Если диалог уже идёт — обновляет промпт на лету, контекст не теряется.
     """
     chat_id = message.chat.id
     arg = message.text[len('/mood'):].strip().lower()
-    if arg not in MOODS:
+    if arg and arg not in MOODS:
+        bot.send_message(chat_id, 'Фыр! Такого настроения у меня нет:3')
+        arg = ''
+    if not arg:
         current = _get_mood(chat_id)
-        current = f'«{current}»' if current else 'обычное'
+        current_name = MOOD_NAMES.get(current, 'обычное')
         bot.send_message(
             chat_id,
-            f'Сейчас у меня настроение {current}. Могу быть:\n'
-            f'• /mood playful — игривый, шучу и дразнюсь\n'
-            f'• /mood romantic — нежный и романтичный\n'
-            f'• /mood calm — спокойный и короткий\n'
-            f'• /mood grumpy — ворчливый старый лис 🦊💢',
+            f'Сейчас у меня настроение «{current_name}». Выбери, каким мне быть:',
+            reply_markup=_mood_keyboard(current),
         )
         return
-    _set_mood(chat_id, arg)
-    if chat_id in histories and histories[chat_id]:
-        histories[chat_id][0] = {'role': 'system', 'content': _system_prompt(chat_id)}
-        _save_history(chat_id)
-    bot.send_message(chat_id, f'Фыр! Теперь я {arg} 🦊')
+    name = _apply_mood(chat_id, arg)
+    bot.send_message(chat_id, f'Фыр! Теперь у меня настроение «{name}» 🦊')
     logger.info(f'Настроение чата {chat_id}: {arg}')
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('mood:'))
+def mood_callback(call):
+    """Выбор настроения по inline-кнопке: переключает и обновляет меню."""
+    chat_id = call.message.chat.id
+    mood = call.data.split(':', 1)[1]
+    mood = None if mood == 'none' else mood
+    name = _apply_mood(chat_id, mood)
+    bot.answer_callback_query(call.id, f'Теперь я «{name}» 🦊')
+    bot.edit_message_text(
+        f'Сейчас у меня настроение «{name}». Выбери, каким мне быть:',
+        chat_id=chat_id,
+        message_id=call.message.message_id,
+        reply_markup=_mood_keyboard(mood),
+    )
+    logger.info(f'Настроение чата {chat_id}: {mood}')
 
 
 def _random_fox_fact() -> str | None:
@@ -685,6 +750,18 @@ DAILY_GREETINGS = [
     'Утро добрым не бывает? С лисой — бывает! 🦊❤️',
     'Тук-тук! Это я, принёс тебе утреннюю лисичку 🦊',
     'Лиса дня прибыла! Пусть день будет пушистым 🦊✨',
+    'Подъём, хвостатый народ! Лиса дня не заставит себя ждать 🦊⏰',
+    'Я проснулся первым, чтобы пожелать тебе доброго утра! Фыр 🦊💛',
+    'Смотри, какая красота мне сегодня попалась! Держи 🦊📸',
+    'Доброе-предоброе! Лисичка сама просила тебя разбудить 🦊🌅',
+    'Новый день пахнет свежестью и лисами. Вот одна из них 🦊🍃',
+    'Эта лиса передаёт: у тебя сегодня всё получится! Верь в себя 🦊💪',
+    'Фыр! Я тут, лиса тут — утро официально началось 🦊🎉',
+    'Пусть сегодняшний день будет таким же приятным, как эта мордочка 🦊😊',
+    'Твоя ежедневная порция пушистости уже здесь 🦊🤗',
+    'Проснулся, умышся, посмотри на лису — и день удался 🦊☕',
+    'Лисичка прискакала пожелать тебе лёгкого дня без забот 🦊🍀',
+    'Держи утреннюю лису! Она охраняет тебя до вечера 🦊🛡️',
 ]
 
 
@@ -1105,7 +1182,7 @@ def summary_cmd(message):
         message.chat.id,
         'Сожми текст до 3–5 коротких тезисов на русском. '
         'Только тезисы, без вступлений.\n\n' + text,
-        max_tokens=1024,
+        max_tokens=2048,
     )
 
 
@@ -1205,6 +1282,9 @@ def handle_photo(message):
     except Exception as error:
         logger.error(f'Ошибка обработки фото: {error}')
         answer = 'Фыр... мои лисьи глазки подвели. Попробуй ещё раз:3'
+    # reasoning может съесть весь бюджет: content выходит пустым — не молчим
+    if not answer.strip():
+        answer = 'Фыр... у меня слова застряли в горлышке. Попробуй ещё раз:3'
     for i in range(0, len(answer), 4096):
         bot.send_message(chat_id, answer[i:i + 4096])
 
