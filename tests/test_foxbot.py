@@ -21,8 +21,8 @@ import foxbot  # noqa: E402
 def tmp_users_db(tmp_path, monkeypatch):
     "Перенаправляет БД пользователей во временную папку."
     db_path = str(tmp_path / 'users.db')
-    monkeypatch.setattr(foxbot, 'USERS_DB', db_path)
-    monkeypatch.setattr(foxbot, 'USERS_FILE', str(tmp_path / 'users.json'))
+    monkeypatch.setattr(foxbot.config, 'USERS_DB', db_path)
+    monkeypatch.setattr(foxbot.config, 'USERS_FILE', str(tmp_path / 'users.json'))
     return db_path
 
 
@@ -41,19 +41,19 @@ def test_save_user_roundtrip(tmp_users_db):
 
 def test_migrate_users_json(tmp_users_db):
     users = [111, 222, 333]
-    with open(foxbot.USERS_FILE, 'w', encoding='utf-8') as f:
+    with open(foxbot.config.USERS_FILE, 'w', encoding='utf-8') as f:
         json.dump(users, f)
     foxbot.migrate_users_json()
     assert foxbot.load_users() == set(users)
     # файл перемещён в .bak, повторная миграция — no-op
-    assert not os.path.exists(foxbot.USERS_FILE)
-    assert os.path.exists(foxbot.USERS_FILE + '.bak')
+    assert not os.path.exists(foxbot.config.USERS_FILE)
+    assert os.path.exists(foxbot.config.USERS_FILE + '.bak')
     foxbot.migrate_users_json()
     assert foxbot.load_users() == set(users)
 
 
 def test_migrate_broken_json_keeps_going(tmp_users_db):
-    with open(foxbot.USERS_FILE, 'w', encoding='utf-8') as f:
+    with open(foxbot.config.USERS_FILE, 'w', encoding='utf-8') as f:
         f.write('{не json')
     foxbot.migrate_users_json()  # не падает
     assert foxbot.load_users() == set()
@@ -103,7 +103,7 @@ def test_get_new_image_total_failure(monkeypatch):
 # ==== ИИ-история ====
 
 def test_ask_ai_keeps_system_prompt_and_limit(tmp_users_db, monkeypatch):
-    monkeypatch.setattr(foxbot, 'AI_HISTORY_LIMIT', 4)
+    monkeypatch.setattr(foxbot.config, 'AI_HISTORY_LIMIT', 4)
     sent_payloads = []
 
     def fake_post(url, **kw):
@@ -118,13 +118,13 @@ def test_ask_ai_keeps_system_prompt_and_limit(tmp_users_db, monkeypatch):
 
     # Контракт: в API уходит системный промпт + ровно AI_HISTORY_LIMIT сообщений
     last_request = sent_payloads[-1]
-    assert len(last_request) == 1 + foxbot.AI_HISTORY_LIMIT
+    assert len(last_request) == 1 + foxbot.config.AI_HISTORY_LIMIT
     assert last_request[0]['role'] == 'system'
     assert last_request[-1] == {'role': 'user', 'content': 'сообщение 5'}
 
     # В памяти история ограничена: ответ ассистента добавляется после обрезки,
     # но на следующем ходу обрезается — расти бесконечно не может
-    assert len(foxbot.histories[1]) <= 2 + foxbot.AI_HISTORY_LIMIT
+    assert len(foxbot.histories[1]) <= 2 + foxbot.config.AI_HISTORY_LIMIT
 
 
 # ==== Статистика ====
@@ -257,7 +257,7 @@ def _call(data, user_id=42):
 def admin_env(tmp_users_db, monkeypatch):
     "Админский окружение: ADMIN_ID=42, подменённые send-функции бота."
     sent = []
-    monkeypatch.setattr(foxbot, 'ADMIN_ID', 42)
+    monkeypatch.setattr(foxbot.config, 'ADMIN_ID', 42)
     monkeypatch.setattr(
         foxbot.bot, 'send_message',
         lambda chat_id, text, **kw: sent.append((chat_id, text)),
@@ -341,7 +341,7 @@ def game_env(tmp_users_db, monkeypatch):
 
 def test_number_game_win(game_env):
     foxbot._start_number_game(1)
-    assert foxbot.games[1] == {'number': 42, 'tries': 0}
+    assert foxbot.games[1] == {'game': 'number', 'number': 42, 'tries': 0}
 
     foxbot.say_hi(_msg('50', chat_id=1))
     assert 'Меньше' in game_env[-1][1]
@@ -362,6 +362,45 @@ def test_stopgame(game_env):
     foxbot.stop_game(_msg('/stopgame', chat_id=1))
     assert 1 not in foxbot.games
     assert 'Сдаёшься' in game_env[-1][1]
+
+
+# ==== Хвостик-Мордашка-Лапка ====
+
+def test_rps_rules():
+    "Хвост бьёт морду, морда кусает лапу, лапа бьёт хвост."
+    assert foxbot._rps_result('tail', 'face') == 'player'
+    assert foxbot._rps_result('face', 'paw') == 'player'
+    assert foxbot._rps_result('paw', 'tail') == 'player'
+    # проигрышные ходы — победа лисы
+    assert foxbot._rps_result('face', 'tail') == 'fox'
+    assert foxbot._rps_result('paw', 'face') == 'fox'
+    assert foxbot._rps_result('tail', 'paw') == 'fox'
+    # ничья
+    assert foxbot._rps_result('tail', 'tail') == 'draw'
+    assert foxbot._rps_result('paw', 'paw') == 'draw'
+
+
+def test_rps_does_not_touch_number_game():
+    "Текст во время другой игры не считается попыткой в «Угадай число»."
+    foxbot.games[1] = {'game': 'rps', 'wins': 0, 'losses': 0, 'draws': 0}
+    assert foxbot._play_number_round(1, '50') is False
+
+
+# ==== Правда или ложь ====
+
+def test_truth_deck_all_facts_no_repeats():
+    deck = foxbot.shuffled_truth_deck()
+    assert sorted(deck) == list(range(len(foxbot.TRUTH_OR_LIE)))
+    again = foxbot.reshuffled_truth_deck(deck)
+    assert sorted(again) == list(range(len(foxbot.TRUTH_OR_LIE)))
+    # новая колода не начинается с того же факта, на котором кончилась старая
+    assert again[0] != deck[-1]
+
+
+def test_truth_has_both_true_and_false():
+    truths = [f['true'] for f in foxbot.TRUTH_OR_LIE]
+    assert len(foxbot.TRUTH_OR_LIE) == 5
+    assert any(truths) and not all(truths)  # есть и правда, и ложь
 
 
 # ==== Настроение лисёнка (/mood) ====
@@ -412,8 +451,8 @@ def test_mood_unknown_arg_shows_menu(tmp_users_db, monkeypatch):
 # ==== Rate limiting на ИИ ====
 
 def test_rate_limit_blocks_after_limit(monkeypatch):
-    monkeypatch.setattr(foxbot, 'AI_RATE_LIMIT', 3)
-    monkeypatch.setattr(foxbot, 'ADMIN_ID', 0)
+    monkeypatch.setattr(foxbot.config, 'AI_RATE_LIMIT', 3)
+    monkeypatch.setattr(foxbot.config, 'ADMIN_ID', 0)
     foxbot.ai_requests.clear()
     assert foxbot._ai_rate_ok(1) is True
     assert foxbot._ai_rate_ok(1) is True
@@ -423,18 +462,18 @@ def test_rate_limit_blocks_after_limit(monkeypatch):
 
 
 def test_rate_limit_window_expires(monkeypatch):
-    monkeypatch.setattr(foxbot, 'AI_RATE_LIMIT', 1)
-    monkeypatch.setattr(foxbot, 'ADMIN_ID', 0)
+    monkeypatch.setattr(foxbot.config, 'AI_RATE_LIMIT', 1)
+    monkeypatch.setattr(foxbot.config, 'ADMIN_ID', 0)
     foxbot.ai_requests.clear()
     assert foxbot._ai_rate_ok(1) is True
     # старая метка протухла — окно снова свободно
-    foxbot.ai_requests[1] = [foxbot.time.time() - foxbot.AI_RATE_WINDOW - 1]
+    foxbot.ai_requests[1] = [foxbot.time.time() - foxbot.config.AI_RATE_WINDOW - 1]
     assert foxbot._ai_rate_ok(1) is True
 
 
 def test_rate_limit_admin_exempt(monkeypatch):
-    monkeypatch.setattr(foxbot, 'AI_RATE_LIMIT', 1)
-    monkeypatch.setattr(foxbot, 'ADMIN_ID', 42)
+    monkeypatch.setattr(foxbot.config, 'AI_RATE_LIMIT', 1)
+    monkeypatch.setattr(foxbot.config, 'ADMIN_ID', 42)
     foxbot.ai_requests.clear()
     foxbot._ai_rate_ok(42)
     assert foxbot._ai_rate_ok(42) is True  # админ без лимита
