@@ -1,4 +1,5 @@
 """Админка: /stats, /updatekb, рассылка /broadcast с подтверждением, /feedback."""
+import threading
 import time
 
 import config
@@ -39,22 +40,18 @@ def stats(message):
     logger.info(f'/stats: {data}')
 
 
-@bot.message_handler(commands=['updatekb'])
-def update_keyboards(message):
-    """Обновляет reply-клавиатуру у всех пользователей (только админ).
+def push_keyboard_to_all() -> tuple[int, int]:
+    """Бесшумно обновляет reply-клавиатуру у всех пользователей.
 
     Reply-клавиатуру нельзя отредактировать, но сообщение с новой разметкой
-    заменяет старую клавиатуру у получателя автоматически.
-    """
-    if message.from_user.id != config.ADMIN_ID:
-        return
+    заменяет старую клавиатуру у получателя автоматически. Шлём минимальное
+    сообщение без звука и без бейджа непрочитанного.
+    Возвращает (отправлено, ошибок)."""
     users = load_users()
     keyboard = build_main_keyboard()
     sent, failed = 0, 0
     for user_id in users:
         try:
-            # Клавиатуру можно обновить только сообщением, поэтому шлём
-            # минимальный бесшумный стикер-пустышку: без звука и без бейджа
             bot.send_message(
                 user_id,
                 '🦊',
@@ -66,13 +63,37 @@ def update_keyboards(message):
             failed += 1
             if _is_gone_user_error(error):
                 remove_user(user_id)
-            logger.warning(f'/updatekb: не доставлено {user_id}: {error}')
+            logger.warning(f'Обновление клавиатуры: не доставлено {user_id}: {error}')
         time.sleep(0.05)  # ~20 сообщений/сек, лимит Telegram ~30/сек
+    return sent, failed
+
+
+@bot.message_handler(commands=['updatekb'])
+def update_keyboards(message):
+    """Обновляет reply-клавиатуру у всех пользователей (только админ)."""
+    if message.from_user.id != config.ADMIN_ID:
+        return
+    sent, failed = push_keyboard_to_all()
     bot.send_message(
         message.chat.id,
         f'Клавиатуры обновлены: отправлено {sent}, ошибок {failed}.',
     )
     logger.info(f'/updatekb: отправлено {sent}, ошибок {failed}')
+
+
+def schedule_keyboard_push_on_startup(delay_seconds: int = 5):
+    """При старте бота сам обновляет клавиатуру всем (в фоне).
+
+    Иначе после деплоя пользователи сидят со старыми кнопками, пока админ
+    не вспомнит про /updatekb."""
+    def _push():
+        time.sleep(delay_seconds)  # дать polling'у подняться
+        try:
+            sent, failed = push_keyboard_to_all()
+            logger.info(f'Автообновление клавиатур при старте: {sent} отправлено, {failed} ошибок')
+        except Exception as error:
+            logger.error(f'Автообновление клавиатур упало: {error}')
+    threading.Thread(target=_push, daemon=True).start()
 
 
 @bot.message_handler(commands=['broadcast'])

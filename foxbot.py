@@ -52,7 +52,15 @@ from storage import (  # noqa: F401
 )
 
 # Хендлеры и функции, к которым обращаются тесты (и другие модули)
-from handlers.admin import broadcast, broadcast_confirm, feedback, stats, update_keyboards  # noqa: F401,E501
+from handlers.admin import (  # noqa: F401
+    broadcast,
+    broadcast_confirm,
+    feedback,
+    push_keyboard_to_all,
+    schedule_keyboard_push_on_startup,
+    stats,
+    update_keyboards,
+)
 from handlers.apps import send_games  # noqa: F401
 from handlers.chat import (  # noqa: F401
     handle_photo,
@@ -106,6 +114,8 @@ def main():
         logger.warning(f'Не удалось зарегистрировать меню команд: {error}')
     # Ежедневная «лиса дня» всем пользователям (DAILY_FOX_HOUR:DAILY_FOX_MINUTE)
     start_daily_fox_thread()
+    # После деплоя сам обновим клавиатуру у всех (бесшумно)
+    schedule_keyboard_push_on_startup()
     if WEBHOOK_URL:
         logger.info(f'FoxBot запущен в режиме webhook: {WEBHOOK_URL}')
         bot.run_webhooks(
