@@ -448,6 +448,30 @@ def test_mood_unknown_arg_shows_menu(tmp_users_db, monkeypatch):
     assert any(b.callback_data == 'mood:playful' for row in keyboard.keyboard for b in row)
 
 
+# ==== Порядок хендлеров: say_hi ловит любой текст и должен быть ПОСЛЕДНИМ ====
+
+def _first_text_handler(text: str) -> str | None:
+    "Имя первого хендлера, который получит текстовое сообщение."
+    msg = SimpleNamespace(text=text, content_type='text', caption=None)
+    for h in foxbot.bot.message_handlers:
+        if foxbot.bot._test_message_handler(h, msg):
+            return h['function'].__name__
+    return None
+
+
+def test_commands_reach_their_handlers_not_say_hi():
+    "Контракт: команды попадают в свои хендлеры, а не в say_hi (первый match)."
+    assert _first_text_handler('/mood') == 'mood_cmd'
+    assert _first_text_handler('/translate привет') == 'translate_cmd'
+    assert _first_text_handler('/summary текст') == 'summary_cmd'
+    assert _first_text_handler('/stats') == 'stats'
+    assert _first_text_handler('/broadcast всем привет') == 'broadcast'
+    assert _first_text_handler('/feedback спасибо') == 'feedback'
+    assert _first_text_handler('/stopgame') == 'stop_game'
+    # обычный текст — по-прежнему say_hi
+    assert _first_text_handler('привет, лиса') == 'say_hi'
+
+
 # ==== Rate limiting на ИИ ====
 
 def test_rate_limit_blocks_after_limit(monkeypatch):

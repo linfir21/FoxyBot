@@ -32,89 +32,6 @@ except ImportError:
     sr = None
 
 
-@bot.message_handler(content_types=['text'])
-def say_hi(message):
-    """Обработчик текстовых сообщений: кнопки, игра и ИИ-болтовня."""
-    chat = message.chat
-    chat_id = chat.id
-    text = message.text
-    save_user(chat_id)
-    track_message(chat_id)
-    logger.info(f'Получено сообщение от {chat_id}: {text}')
-
-    # Ответ админа на фидбек (реплаем на пересланное сообщение)
-    relay = message.reply_to_message
-    if (relay is not None and message.from_user.id == config.ADMIN_ID
-            and relay.message_id in feedback_relay):
-        target = feedback_relay[relay.message_id]
-        try:
-            bot.send_message(target, f'💌 Ответ от Лисёночка:\n\n{text}')
-            bot.send_message(chat_id, 'Ответ отправлен ✔️')
-            logger.info(f'Ответ админа доставлен в чат {target}')
-        except Exception as error:
-            bot.send_message(chat_id, f'Не доставлено: {error}')
-            logger.warning(f'Ответ админа не доставлен в {target}: {error}')
-        return
-
-    # Команды обрабатываются своими хендлерами; сюда — только кнопки и болтовня
-    if text.startswith('/'):
-        return
-
-    # Кнопки с готовыми фразами
-    if text == 'Фыр ❤️':
-        bot.send_message(chat_id=chat_id, text=content.tender_phrase())
-        logger.info(f'Отправлена нежность в чат {chat_id}')
-        return
-
-    if text == 'Горяченькое 🔥':
-        bot.send_message(chat_id=chat_id, text=content.spicy_phrase())
-        logger.info(f'Отправлено горяченькое в чат {chat_id}')
-        return
-
-    if text == 'Лисёночек:3':
-        new_fox(message)
-        return
-
-    if text == '🎮 Игры APK':
-        send_games(message)
-        return
-
-    if text == 'Лисий факт 🦊📚':
-        fox_fact(message)
-        return
-
-    if text == '🎮 Игры':
-        send_games_menu(chat_id)
-        return
-
-    # Активная игра: любой текст в «Угадай число» трактуем как попытку
-    if _play_number_round(chat_id, text):
-        return
-
-    # Всё остальное уходит в ИИ-чат
-    if not config.MOONSHOT_KEY:
-        bot.send_message(
-            chat_id=chat_id,
-            text=('Привет, я FoxBot! Нажми Лисёночек:3, и я покажу тебе лису. '
-                  'Или нажми на кнопочку, и я покажу тебе любовь:3'),
-        )
-        return
-
-    if not _ai_rate_ok(chat_id):
-        bot.send_message(chat_id, 'Фыр-фыр, не так быстро! Дай мне перевести дух минутку:3')
-        return
-
-    bot.send_chat_action(chat_id, 'typing')
-    try:
-        answer = ask_ai(chat_id, text)
-    except Exception as error:
-        logger.error(f'Ошибка AI-запроса: {error}')
-        answer = 'Фыр... я запуталась в мыслях. Попробуй ещё раз:3'
-    # лимит Telegram — 4096 символов на сообщение
-    for i in range(0, len(answer), 4096):
-        bot.send_message(chat_id, answer[i:i + 4096])
-
-
 # ==== Голосовые сообщения: OGG → WAV (ffmpeg) → Google STT → ИИ ====
 
 def _transcribe_voice(message) -> str | None:
@@ -322,3 +239,86 @@ def mood_callback(call):
         reply_markup=_mood_keyboard(mood),
     )
     logger.info(f'Настроение чата {chat_id}: {mood}')
+
+
+@bot.message_handler(content_types=['text'])
+def say_hi(message):
+    """Обработчик текстовых сообщений: кнопки, игра и ИИ-болтовня."""
+    chat = message.chat
+    chat_id = chat.id
+    text = message.text
+    save_user(chat_id)
+    track_message(chat_id)
+    logger.info(f'Получено сообщение от {chat_id}: {text}')
+
+    # Ответ админа на фидбек (реплаем на пересланное сообщение)
+    relay = message.reply_to_message
+    if (relay is not None and message.from_user.id == config.ADMIN_ID
+            and relay.message_id in feedback_relay):
+        target = feedback_relay[relay.message_id]
+        try:
+            bot.send_message(target, f'💌 Ответ от Лисёночка:\n\n{text}')
+            bot.send_message(chat_id, 'Ответ отправлен ✔️')
+            logger.info(f'Ответ админа доставлен в чат {target}')
+        except Exception as error:
+            bot.send_message(chat_id, f'Не доставлено: {error}')
+            logger.warning(f'Ответ админа не доставлен в {target}: {error}')
+        return
+
+    # Команды обрабатываются своими хендлерами; сюда — только кнопки и болтовня
+    if text.startswith('/'):
+        return
+
+    # Кнопки с готовыми фразами
+    if text == 'Фыр ❤️':
+        bot.send_message(chat_id=chat_id, text=content.tender_phrase())
+        logger.info(f'Отправлена нежность в чат {chat_id}')
+        return
+
+    if text == 'Горяченькое 🔥':
+        bot.send_message(chat_id=chat_id, text=content.spicy_phrase())
+        logger.info(f'Отправлено горяченькое в чат {chat_id}')
+        return
+
+    if text == 'Лисёночек:3':
+        new_fox(message)
+        return
+
+    if text == '🎮 Игры APK':
+        send_games(message)
+        return
+
+    if text == 'Лисий факт 🦊📚':
+        fox_fact(message)
+        return
+
+    if text == '🎮 Игры':
+        send_games_menu(chat_id)
+        return
+
+    # Активная игра: любой текст в «Угадай число» трактуем как попытку
+    if _play_number_round(chat_id, text):
+        return
+
+    # Всё остальное уходит в ИИ-чат
+    if not config.MOONSHOT_KEY:
+        bot.send_message(
+            chat_id=chat_id,
+            text=('Привет, я FoxBot! Нажми Лисёночек:3, и я покажу тебе лису. '
+                  'Или нажми на кнопочку, и я покажу тебе любовь:3'),
+        )
+        return
+
+    if not _ai_rate_ok(chat_id):
+        bot.send_message(chat_id, 'Фыр-фыр, не так быстро! Дай мне перевести дух минутку:3')
+        return
+
+    bot.send_chat_action(chat_id, 'typing')
+    try:
+        answer = ask_ai(chat_id, text)
+    except Exception as error:
+        logger.error(f'Ошибка AI-запроса: {error}')
+        answer = 'Фыр... я запуталась в мыслях. Попробуй ещё раз:3'
+    # лимит Telegram — 4096 символов на сообщение
+    for i in range(0, len(answer), 4096):
+        bot.send_message(chat_id, answer[i:i + 4096])
