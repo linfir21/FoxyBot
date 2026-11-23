@@ -155,7 +155,7 @@ def _ask_once_or_apology(chat_id: int, prompt: str, max_tokens: int = 2048):
         result = ask_ai_once(prompt, max_tokens=max_tokens)
     except Exception as error:
         logger.error(f'Ошибка одноразового ИИ-запроса: {error}')
-        result = 'Фыр... я задремал. Попробуй ещё раз:3'
+        result = 'Фыр... я задремала. Попробуй ещё раз:3'
     for i in range(0, len(result), 4096):
         bot.send_message(chat_id, result[i:i + 4096])
 
@@ -215,7 +215,7 @@ def mood_cmd(message):
         current_name = content.MOOD_NAMES.get(current, 'обычное')
         bot.send_message(
             chat_id,
-            f'Сейчас у меня настроение «{current_name}». Выбери, каким мне быть:',
+            f'Сейчас у меня настроение «{current_name}». Выбери, какой мне быть:',
             reply_markup=_mood_keyboard(current),
         )
         return
@@ -233,7 +233,7 @@ def mood_callback(call):
     name = _apply_mood(chat_id, mood)
     bot.answer_callback_query(call.id, f'Теперь я «{name}» 🦊')
     bot.edit_message_text(
-        f'Сейчас у меня настроение «{name}». Выбери, каким мне быть:',
+        f'Сейчас у меня настроение «{name}». Выбери, какой мне быть:',
         chat_id=chat_id,
         message_id=call.message.message_id,
         reply_markup=_mood_keyboard(mood),
@@ -304,7 +304,7 @@ def say_hi(message):
     if not config.MOONSHOT_KEY:
         bot.send_message(
             chat_id=chat_id,
-            text=('Привет, я FoxBot! Нажми Лисёночек:3, и я покажу тебе лису. '
+            text=('Привет, я Твоя Лисичка! Нажми Лисёночек:3, и я покажу тебе лису. '
                   'Или нажми на кнопочку, и я покажу тебе любовь:3'),
         )
         return
